@@ -1,0 +1,245 @@
+{
+  "system": "PAPERGUARD",
+  "sourceFile": "synthetic-example.docx",
+  "policyPack": {
+    "id": "example-academic-policy",
+    "institution": "Example institution",
+    "version": "2025-26"
+  },
+  "overallStatus": "FAIL",
+  "summary": "FAIL — 3 policy check(s) failed. 15/18 policies passed.",
+  "counts": {
+    "total": 18,
+    "passed": 15,
+    "failed": 3,
+    "reviewRequired": 0,
+    "notChecked": 0
+  },
+  "issues": [
+    {
+      "policy_id": "POL-003",
+      "policy": "Abstract word count",
+      "category": "STRUCTURE",
+      "status": "FAIL",
+      "severity": "ERROR",
+      "code": "ABSTRACT_WORD_COUNT",
+      "paragraphIndex": null,
+      "expected": "150-300 words",
+      "detected": 9,
+      "reason": null,
+      "evidence": null
+    },
+    {
+      "policy_id": "POL-007",
+      "policy": "Declaration of authorship present",
+      "category": "STRUCTURE",
+      "status": "FAIL",
+      "severity": "ERROR",
+      "code": "DECLARATION",
+      "paragraphIndex": null,
+      "expected": "Declaration of Authorship must be present",
+      "detected": "NOT_FOUND",
+      "reason": null,
+      "evidence": null
+    },
+    {
+      "policy_id": "POL-008",
+      "policy": "Body font family",
+      "category": "FORMATTING",
+      "status": "FAIL",
+      "severity": "ERROR",
+      "code": "FONT_FAMILY",
+      "paragraphIndex": null,
+      "expected": "Times New Roman",
+      "detected": "Arial",
+      "reason": null,
+      "evidence": "This short abstract is intentionally below the required minimum."
+    },
+    {
+      "policy_id": "POL-008",
+      "policy": "Body font family",
+      "category": "FORMATTING",
+      "status": "FAIL",
+      "severity": "ERROR",
+      "code": "FONT_FAMILY",
+      "paragraphIndex": null,
+      "expected": "Times New Roman",
+      "detected": "Arial",
+      "reason": null,
+      "evidence": "Introduction"
+    },
+    {
+      "policy_id": "POL-008",
+      "policy": "Body font family",
+      "category": "FORMATTING",
+      "status": "FAIL",
+      "severity": "ERROR",
+      "code": "FONT_FAMILY",
+      "paragraphIndex": null,
+      "expected": "Times New Roman",
+      "detected": "Arial",
+      "reason": null,
+      "evidence": "Synthetic body text without personal information."
+    },
+    {
+      "policy_id": "POL-008",
+      "policy": "Body font family",
+      "category": "FORMATTING",
+      "status": "FAIL",
+      "severity": "ERROR",
+      "code": "FONT_FAMILY",
+      "paragraphIndex": null,
+      "expected": "Times New Roman",
+      "detected": "Arial",
+      "reason": null,
+      "evidence": "Conclusion"
+    },
+    {
+      "policy_id": "POL-008",
+      "policy": "Body font family",
+      "category": "FORMATTING",
+      "status": "FAIL",
+      "severity": "ERROR",
+      "code": "FONT_FAMILY",
+      "paragraphIndex": null,
+      "expected": "Times New Roman",
+      "detected": "Arial",
+      "reason": null,
+      "evidence": "Synthetic conclusion."
+    }
+  ],
+  "policies": [
+    {
+      "policy_id": "POL-001",
+      "name": "Title page present",
+      "category": "STRUCTURE",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-002",
+      "name": "Abstract section present",
+      "category": "STRUCTURE",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-003",
+      "name": "Abstract word count",
+      "category": "STRUCTURE",
+      "status": "FAIL",
+      "issueCount": 1
+    },
+    {
+      "policy_id": "POL-004",
+      "name": "Introduction section present",
+      "category": "STRUCTURE",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-005",
+      "name": "Conclusion section present",
+      "category": "STRUCTURE",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-006",
+      "name": "References section present",
+      "category": "STRUCTURE",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-007",
+      "name": "Declaration of authorship present",
+      "category": "STRUCTURE",
+      "status": "FAIL",
+      "issueCount": 1
+    },
+    {
+      "policy_id": "POL-008",
+      "name": "Body font family",
+      "category": "FORMATTING",
+      "status": "FAIL",
+      "issueCount": 5
+    },
+    {
+      "policy_id": "POL-009",
+      "name": "Body font size",
+      "category": "FORMATTING",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-010",
+      "name": "Line spacing",
+      "category": "FORMATTING",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-011",
+      "name": "Page margins",
+      "category": "LAYOUT",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-012",
+      "name": "In-text citations have reference entries",
+      "category": "CITATIONS",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-013",
+      "name": "Reference entries are cited in text",
+      "category": "CITATIONS",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-014",
+      "name": "References alphabetically ordered",
+      "category": "CITATIONS",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-015",
+      "name": "Long direct quotations as block quotes",
+      "category": "QUOTATIONS",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-016",
+      "name": "Figure captions present",
+      "category": "FIGURES",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-017",
+      "name": "Figure source credits",
+      "category": "FIGURES",
+      "status": "PASS",
+      "issueCount": 0
+    },
+    {
+      "policy_id": "POL-018",
+      "name": "Heading hierarchy consistency",
+      "category": "STRUCTURE",
+      "status": "PASS",
+      "issueCount": 0
+    }
+  ],
+  "documentStats": {
+    "paragraphCount": 10,
+    "characterCount": 225,
+    "figureCount": 0
+  },
+  "generatedAt": "2026-01-01T12:00:00.000Z"
+}

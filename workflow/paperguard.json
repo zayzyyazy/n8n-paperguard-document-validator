@@ -1,0 +1,424 @@
+{
+  "name": "PAPERGUARD — Document Validation & Review Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "PAPERGUARD",
+        "formDescription": "Upload your academic paper for validation.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Academic Paper",
+              "fieldType": "file",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -240,
+        0
+      ],
+      "id": "67d20050-40b7-5d5f-a36f-2093c9dd0886",
+      "name": "On form submission"
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "Academic_Paper"
+      },
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1.1,
+      "position": [
+        -16,
+        320
+      ],
+      "id": "dd2356ac-5475-5afd-bb45-680f48ecf054",
+      "name": "Compression"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfor (const item of items) {\n  if (!item.binary?.Academic_Paper) {\n    throw new Error('Academic_Paper binary file not found');\n  }\n\n  item.binary.Academic_Paper.fileExtension = 'zip';\n  item.binary.Academic_Paper.mimeType = 'application/zip';\n  item.binary.Academic_Paper.fileName = 'paper.zip';\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -176,
+        320
+      ],
+      "id": "4d02088d-1c1e-5bfb-be89-347e469d9d2f",
+      "name": "Prepare DOCX as ZIP"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\n\nasync function binaryToText(binaryProperty) {\n  const buffer = await this.helpers.getBinaryDataBuffer(\n    0,\n    binaryProperty\n  );\n\n  return buffer.toString('utf8');\n}\n\nconst documentXml = await binaryToText.call(this, 'file_4');\nconst stylesXml = await binaryToText.call(this, 'file_6');\n\nreturn [{\n  json: {\n    documentXml,\n    stylesXml,\n    sourceFile: $('On form submission').first().json['Academic Paper']?.[0]?.filename\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        176,
+        320
+      ],
+      "id": "a3f6871e-98ce-5563-9607-7f8f6dd2543b",
+      "name": "Parse DOCX Structure"
+    },
+    {
+      "parameters": {
+        "jsCode": "const documentXml = $json.documentXml;\nconst stylesXml = $json.stylesXml;\n\n\n// ==================================================\n// HELPERS\n// ==================================================\n\nfunction decodeXml(text = '') {\n  return text\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&apos;/g, \"'\");\n}\n\n\nfunction twipsToCm(twips) {\n  if (twips === null || twips === undefined) {\n    return null;\n  }\n\n  return Number(\n    ((Number(twips) / 1440) * 2.54).toFixed(2)\n  );\n}\n\n\n// ==================================================\n// DOCUMENT DEFAULTS\n// ==================================================\n\n// Word stores font size in half-points.\n// Example:\n// 22 = 11 pt\n// 24 = 12 pt\n\nconst defaultSizeRaw =\n  stylesXml.match(\n    /<w:docDefaults>[\\s\\S]*?<w:sz w:val=\"(\\d+)\"/\n  )?.[1];\n\n\nconst defaultFontSize =\n  defaultSizeRaw\n    ? Number(defaultSizeRaw) / 2\n    : null;\n\n\nconst defaultFontMatch =\n  stylesXml.match(\n    /<w:docDefaults>[\\s\\S]*?<w:rFonts[^>]*w:ascii=\"([^\"]+)\"/\n  );\n\n\nconst defaultFontFamily =\n  defaultFontMatch?.[1] ?? null;\n\n\n// ==================================================\n// PAGE MARGINS\n// ==================================================\n\n// Word stores page margins in twips.\n// 1440 twips = 1 inch.\n// Convert them to centimetres.\n\nconst pgMarMatch =\n  documentXml.match(\n    /<w:pgMar\\b([^>]*)\\/?>/\n  );\n\n\nlet margins = null;\n\n\nif (pgMarMatch) {\n\n  const marginAttributes =\n    pgMarMatch[1];\n\n\n  const getMarginValue = name => {\n\n    const match =\n      marginAttributes.match(\n        new RegExp(`w:${name}=\"(\\\\d+)\"`)\n      );\n\n    return match\n      ? Number(match[1])\n      : null;\n  };\n\n\n  margins = {\n\n    top:\n      twipsToCm(\n        getMarginValue('top')\n      ),\n\n    right:\n      twipsToCm(\n        getMarginValue('right')\n      ),\n\n    bottom:\n      twipsToCm(\n        getMarginValue('bottom')\n      ),\n\n    left:\n      twipsToCm(\n        getMarginValue('left')\n      )\n  };\n}\n\n\n// ==================================================\n// PARAGRAPHS\n// ==================================================\n\nconst paragraphMatches =\n  documentXml.match(\n    /<w:p(?:\\s[^>]*)?>[\\s\\S]*?<\\/w:p>/g\n  ) || [];\n\n\nconst paragraphs =\n  paragraphMatches\n\n    .map((p, index) => {\n\n\n      // ==============================================\n      // PARAGRAPH STYLE\n      // ==============================================\n\n      const style =\n        p.match(\n          /<w:pStyle w:val=\"([^\"]+)\"/\n        )?.[1] ?? 'Normal';\n\n\n      // ==============================================\n      // LINE SPACING\n      // ==============================================\n\n      const spacingTag =\n        p.match(\n          /<w:spacing[^>]*>/\n        )?.[0] ?? '';\n\n\n      const lineRaw =\n        spacingTag.match(\n          /w:line=\"(\\d+)\"/\n        )?.[1];\n\n\n      const lineRule =\n        spacingTag.match(\n          /w:lineRule=\"([^\"]+)\"/\n        )?.[1] ?? null;\n\n\n      // Word \"auto\" spacing:\n      //\n      // 240 = single\n      // 360 = 1.5\n      // 480 = double\n\n      let lineSpacing = null;\n\n\n      if (\n        lineRaw &&\n        (!lineRule || lineRule === 'auto')\n      ) {\n\n        lineSpacing =\n          Number(lineRaw) / 240;\n      }\n\n\n      // ==============================================\n      // PARAGRAPH INDENTATION\n      // ==============================================\n\n      // Block quotations are normally represented\n      // using paragraph indentation.\n      //\n      // Word stores indentation in twips.\n      // We preserve both the raw twip value and a\n      // centimetre representation.\n\n      const indentationTag =\n        p.match(\n          /<w:ind\\b[^>]*\\/?>/\n        )?.[0] ?? '';\n\n\n      const getIndentValue = name => {\n\n        const match =\n          indentationTag.match(\n            new RegExp(`w:${name}=\"(-?\\\\d+)\"`)\n          );\n\n        return match\n          ? Number(match[1])\n          : null;\n      };\n\n\n      const leftIndentTwips =\n        getIndentValue('left');\n\n\n      const rightIndentTwips =\n        getIndentValue('right');\n\n\n      const firstLineIndentTwips =\n        getIndentValue('firstLine');\n\n\n      const hangingIndentTwips =\n        getIndentValue('hanging');\n\n\n      const indentation = {\n\n        leftTwips:\n          leftIndentTwips,\n\n        rightTwips:\n          rightIndentTwips,\n\n        firstLineTwips:\n          firstLineIndentTwips,\n\n        hangingTwips:\n          hangingIndentTwips,\n\n        leftCm:\n          twipsToCm(\n            leftIndentTwips\n          ),\n\n        rightCm:\n          twipsToCm(\n            rightIndentTwips\n          ),\n\n        firstLineCm:\n          twipsToCm(\n            firstLineIndentTwips\n          ),\n\n        hangingCm:\n          twipsToCm(\n            hangingIndentTwips\n          )\n      };\n\n\n      // ==============================================\n      // FIGURE / IMAGE DETECTION\n      // ==============================================\n\n      // Modern DOCX images normally use <w:drawing>.\n      // Older Word formats can use <w:pict>.\n\n      const drawingCount =\n        (p.match(/<w:drawing[\\s>]/g) || []).length +\n        (p.match(/<w:pict[\\s>]/g) || []).length;\n\n\n      const hasFigure =\n        drawingCount > 0;\n\n\n      // ==============================================\n      // RUNS\n      // ==============================================\n\n      const runMatches =\n        p.match(\n          /<w:r(?:\\s[^>]*)?>[\\s\\S]*?<\\/w:r>/g\n        ) || [];\n\n\n      const runs =\n        runMatches.map(run => {\n\n\n          // ------------------------------------------\n          // TEXT\n          // ------------------------------------------\n\n          const textParts = [\n            ...run.matchAll(\n              /<w:t(?:\\s[^>]*)?>([\\s\\S]*?)<\\/w:t>/g\n            )\n          ];\n\n\n          const text =\n            textParts\n              .map(match =>\n                decodeXml(match[1])\n              )\n              .join('');\n\n\n          // ------------------------------------------\n          // FONT SIZE\n          // ------------------------------------------\n\n          const sizeRaw =\n            run.match(\n              /<w:sz w:val=\"(\\d+)\"/\n            )?.[1];\n\n\n          const fontSize =\n            sizeRaw\n              ? Number(sizeRaw) / 2\n              : null;\n\n\n          // ------------------------------------------\n          // FONT FAMILY\n          // ------------------------------------------\n\n          const fontsTag =\n            run.match(\n              /<w:rFonts[^>]*>/\n            )?.[0] ?? '';\n\n\n          const fontFamily =\n            fontsTag.match(\n              /w:ascii=\"([^\"]+)\"/\n            )?.[1] ?? null;\n\n\n          // ------------------------------------------\n          // BOLD / ITALIC\n          // ------------------------------------------\n\n          const bold =\n            /<w:b(?:\\/>|>)/.test(run);\n\n\n          const italic =\n            /<w:i(?:\\/>|>)/.test(run);\n\n\n          return {\n            text,\n            fontSize,\n            fontFamily,\n            bold,\n            italic\n          };\n        });\n\n\n      // ==============================================\n      // COMPLETE PARAGRAPH TEXT\n      // ==============================================\n\n      const text =\n        runs\n          .map(run => run.text)\n          .join('');\n\n\n      // ==============================================\n      // RETURN NORMALIZED PARAGRAPH\n      // ==============================================\n\n      return {\n\n        index,\n\n        text,\n\n        style,\n\n        lineSpacing,\n\n        indentation,\n\n        hasFigure,\n\n        drawingCount,\n\n        runs\n      };\n    })\n\n\n    // ================================================\n    // FILTER\n    // ================================================\n\n    // Keep:\n    //\n    // 1. Normal text paragraphs\n    // 2. Image-only paragraphs\n    //\n    // We deliberately preserve image-only paragraphs\n    // because they are required for figure validation.\n\n    .filter(\n      paragraph =>\n        paragraph.text.trim().length > 0 ||\n        paragraph.hasFigure\n    );\n\n\n// ==================================================\n// FULL TEXT REPRESENTATION\n// ==================================================\n\n// fullText contains textual content only.\n// Image-only paragraphs are excluded from this\n// representation but remain available in paragraphs.\n\nconst fullText =\n  paragraphs\n\n    .filter(\n      paragraph =>\n        paragraph.text.trim().length > 0\n    )\n\n    .map(\n      paragraph =>\n        paragraph.text\n    )\n\n    .join('\\n');\n\n\n// ==================================================\n// DOCUMENT STATS\n// ==================================================\n\nconst figureCount =\n  paragraphs.reduce(\n    (total, paragraph) =>\n      total + paragraph.drawingCount,\n    0\n  );\n\n\n// ==================================================\n// RETURN\n// ==================================================\n\nreturn [{\n  json: {\n\n    sourceFile:\n      $json.sourceFile,\n\n\n    defaults: {\n\n      fontSize:\n        defaultFontSize,\n\n      fontFamily:\n        defaultFontFamily\n    },\n\n\n    layout: {\n\n      margins\n    },\n\n\n    stats: {\n\n      paragraphCount:\n        paragraphs.length,\n\n      characterCount:\n        fullText.length,\n\n      figureCount\n    },\n\n\n    paragraphs,\n\n\n    fullText\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        64
+      ],
+      "id": "0f61bab2-caa5-5021-b4c6-87b5ab75f9e9",
+      "name": "Normalize Document Structure"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst paragraphs = data.paragraphs.map(p => {\n  \n  const resolvedRuns = p.runs.map(run => {\n    \n    // Run-specific formatting overrides document defaults.\n    // If the run doesn't specify something explicitly,\n    // inherit the document default.\n    \n    return {\n      ...run,\n\n      effectiveFontSize:\n        run.fontSize ?? data.defaults.fontSize,\n\n      effectiveFontFamily:\n        run.fontFamily ?? data.defaults.fontFamily\n    };\n  });\n\n  // Only consider runs containing actual visible text\n  const textRuns = resolvedRuns.filter(\n    r => r.text && r.text.trim().length > 0\n  );\n\n  const fontSizes = [\n    ...new Set(\n      textRuns\n        .map(r => r.effectiveFontSize)\n        .filter(v => v !== null)\n    )\n  ];\n\n  const fontFamilies = [\n    ...new Set(\n      textRuns\n        .map(r => r.effectiveFontFamily)\n        .filter(Boolean)\n    )\n  ];\n\n  return {\n    ...p,\n    runs: resolvedRuns,\n\n    effectiveFormatting: {\n      fontSizes,\n      fontFamilies,\n      lineSpacing: p.lineSpacing\n    }\n  };\n});\n\nreturn [{\n  json: {\n    ...data,\n    paragraphs\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        64
+      ],
+      "id": "a9aa960f-67aa-5f47-af96-aa3289b0db92",
+      "name": "Resolve Effective Formatting"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst issues = [];\n\n\n// --------------------------------------------------\n// LOAD FORMATTING POLICIES\n// --------------------------------------------------\n\nconst policies = data.policyPack?.policies || [];\n\nconst fontPolicy =\n  policies.find(p => p.policy_id === 'POL-008');\n\nconst sizePolicy =\n  policies.find(p => p.policy_id === 'POL-009');\n\nconst spacingPolicy =\n  policies.find(p => p.policy_id === 'POL-010');\n\nif (!fontPolicy || !sizePolicy || !spacingPolicy) {\n  throw new Error('Required formatting policies are missing from policyPack.');\n}\n\nconst REQUIRED_FONT = fontPolicy.expected;\nconst REQUIRED_SIZE = sizePolicy.expected;\nconst REQUIRED_LINE_SPACING = spacingPolicy.expected;\n\n\n// --------------------------------------------------\n// DETERMINE BODY BOUNDARIES\n// --------------------------------------------------\n\n// For V1, body formatting starts after the Abstract heading\n// and ends before References.\n//\n// This prevents title-page text and headings from being\n// incorrectly judged as normal body text.\n\nconst paragraphs = data.paragraphs || [];\n\nconst abstractIndex = paragraphs.findIndex(\n  p => (p.text || '').trim().toLowerCase() === 'abstract'\n);\n\nconst referencesIndex = paragraphs.findIndex(\n  p => (p.text || '').trim().toLowerCase() === 'references'\n);\n\n\n// --------------------------------------------------\n// HELPERS\n// --------------------------------------------------\n\nfunction isHeading(paragraph) {\n  return /^Heading\\s?\\d$/i.test(paragraph.style || '');\n}\n\nfunction isBodyParagraph(paragraph) {\n\n  if (!paragraph.text?.trim()) {\n    return false;\n  }\n\n  // Don't validate headings as body typography.\n  if (isHeading(paragraph)) {\n    return false;\n  }\n\n  // Exclude everything before/including Abstract heading.\n  if (\n    abstractIndex !== -1 &&\n    paragraph.index <= paragraphs[abstractIndex].index\n  ) {\n    return false;\n  }\n\n  // Exclude References and everything after it.\n  if (\n    referencesIndex !== -1 &&\n    paragraph.index >= paragraphs[referencesIndex].index\n  ) {\n    return false;\n  }\n\n  return true;\n}\n\n\n// --------------------------------------------------\n// VALIDATE BODY FORMATTING\n// --------------------------------------------------\n\nfor (const paragraph of paragraphs) {\n\n  if (!isBodyParagraph(paragraph)) {\n    continue;\n  }\n\n\n  // ------------------------------------------------\n  // FONT FAMILY + SIZE\n  // ------------------------------------------------\n\n  for (const run of paragraph.runs || []) {\n\n    if (!run.text?.trim()) {\n      continue;\n    }\n\n\n    // POL-008 — FONT FAMILY\n\n    if (\n      run.effectiveFontFamily &&\n      run.effectiveFontFamily !== REQUIRED_FONT\n    ) {\n      issues.push({\n        policy_id: fontPolicy.policy_id,\n        code: 'FONT_FAMILY',\n        severity: 'ERROR',\n        paragraph_index: paragraph.index,\n        evidence: run.text.substring(0, 160),\n        expected: REQUIRED_FONT,\n        detected: run.effectiveFontFamily\n      });\n    }\n\n\n    // POL-009 — FONT SIZE\n\n    if (\n      run.effectiveFontSize !== null &&\n      run.effectiveFontSize !== undefined &&\n      run.effectiveFontSize !== REQUIRED_SIZE\n    ) {\n      issues.push({\n        policy_id: sizePolicy.policy_id,\n        code: 'FONT_SIZE',\n        severity: 'ERROR',\n        paragraph_index: paragraph.index,\n        evidence: run.text.substring(0, 160),\n        expected: REQUIRED_SIZE,\n        detected: run.effectiveFontSize\n      });\n    }\n  }\n\n\n  // ------------------------------------------------\n  // POL-010 — LINE SPACING\n  // ------------------------------------------------\n\n  if (\n    paragraph.lineSpacing !== null &&\n    paragraph.lineSpacing !== undefined &&\n    Math.abs(\n      paragraph.lineSpacing - REQUIRED_LINE_SPACING\n    ) > 0.01\n  ) {\n    issues.push({\n      policy_id: spacingPolicy.policy_id,\n      code: 'LINE_SPACING',\n      severity: 'ERROR',\n      paragraph_index: paragraph.index,\n      evidence: paragraph.text.substring(0, 160),\n      expected: REQUIRED_LINE_SPACING,\n      detected: paragraph.lineSpacing\n    });\n  }\n}\n\n\n// --------------------------------------------------\n// SUMMARY\n// --------------------------------------------------\n\nconst counts = {};\n\nfor (const issue of issues) {\n  counts[issue.code] =\n    (counts[issue.code] || 0) + 1;\n}\n\n\n// --------------------------------------------------\n// RETURN\n// --------------------------------------------------\n\nreturn [{\n  json: {\n    ...data,\n\n    validation: {\n      ...(data.validation || {}),\n\n      formatting: {\n        status: issues.length === 0 ? 'PASS' : 'FAIL',\n        issueCount: issues.length,\n        counts,\n        issues\n      }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        64
+      ],
+      "id": "df650bed-60c2-5b45-9f6b-115793d97778",
+      "name": "Validate Formatting Rules"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst paragraphs = data.paragraphs || [];\nconst policies = data.policyPack?.policies || [];\n\nconst issues = [];\nconst checks = [];\n\n\n// ------------------------------------\n// HELPERS\n// ------------------------------------\n\nconst normalize = text =>\n  (text || '').trim().toLowerCase();\n\nconst texts = paragraphs.map(p =>\n  normalize(p.text)\n);\n\nconst getPolicy = policyId => {\n  const policy = policies.find(\n    p => p.policy_id === policyId\n  );\n\n  if (!policy) {\n    throw new Error(\n      `Policy ${policyId} not found in policyPack.`\n    );\n  }\n\n  return policy;\n};\n\n\n// ------------------------------------\n// REQUIRED SECTION DEFINITIONS\n// ------------------------------------\n\nconst requiredSections = [\n  {\n    policy_id: 'POL-001',\n    code: 'TITLE_PAGE',\n    label: 'Title page',\n\n    test: () => {\n      const firstFive = paragraphs\n        .slice(0, 5)\n        .map(p => (p.text || '').trim())\n        .filter(Boolean);\n\n      return firstFive.length >= 3;\n    }\n  },\n\n  {\n    policy_id: 'POL-002',\n    code: 'ABSTRACT',\n    label: 'Abstract',\n\n    test: () =>\n      texts.includes('abstract')\n  },\n\n  {\n    policy_id: 'POL-004',\n    code: 'INTRODUCTION',\n    label: 'Introduction',\n\n    test: () =>\n      texts.includes('introduction')\n  },\n\n  {\n    policy_id: 'POL-005',\n    code: 'CONCLUSION',\n    label: 'Conclusion',\n\n    test: () =>\n      texts.includes('conclusion')\n  },\n\n  {\n    policy_id: 'POL-006',\n    code: 'REFERENCES_SECTION',\n    label: 'References',\n\n    test: () =>\n      texts.includes('references')\n  },\n\n  {\n    policy_id: 'POL-007',\n    code: 'DECLARATION',\n    label: 'Declaration of Authorship',\n\n    test: () =>\n      texts.some(\n        text =>\n          text.includes(\n            'declaration of authorship'\n          )\n      )\n  }\n];\n\n\n// ------------------------------------\n// RUN REQUIRED SECTION CHECKS\n// ------------------------------------\n\nfor (const section of requiredSections) {\n\n  const policy =\n    getPolicy(section.policy_id);\n\n  const present =\n    section.test();\n\n  checks.push({\n    policy_id: policy.policy_id,\n    code: section.code,\n    present\n  });\n\n  if (!present) {\n\n    issues.push({\n      policy_id: policy.policy_id,\n      code: section.code,\n      severity: 'ERROR',\n\n      expected:\n        `${section.label} must be present`,\n\n      detected:\n        'NOT_FOUND'\n    });\n  }\n}\n\n\n// ------------------------------------\n// POL-003\n// ABSTRACT WORD COUNT\n// ------------------------------------\n\nconst abstractPolicy =\n  getPolicy('POL-003');\n\nconst abstractIndex =\n  paragraphs.findIndex(\n    p => normalize(p.text) === 'abstract'\n  );\n\nconst introductionIndex =\n  paragraphs.findIndex(\n    p => normalize(p.text) === 'introduction'\n  );\n\n\nlet abstractWordCount = null;\nlet abstractWordCountPass = false;\n\n\n// Only evaluate word count when we can\n// reliably identify Abstract boundaries.\n\nif (\n  abstractIndex !== -1 &&\n  introductionIndex > abstractIndex\n) {\n\n  const abstractText = paragraphs\n    .slice(\n      abstractIndex + 1,\n      introductionIndex\n    )\n    .map(p => (p.text || '').trim())\n    .filter(Boolean)\n    .join(' ');\n\n\n  abstractWordCount =\n    abstractText\n      .split(/\\s+/)\n      .filter(Boolean)\n      .length;\n\n\n  abstractWordCountPass =\n    abstractWordCount >=\n      abstractPolicy.min_words &&\n    abstractWordCount <=\n      abstractPolicy.max_words;\n\n\n  if (!abstractWordCountPass) {\n\n    issues.push({\n      policy_id:\n        abstractPolicy.policy_id,\n\n      code:\n        'ABSTRACT_WORD_COUNT',\n\n      severity:\n        'ERROR',\n\n      expected:\n        `${abstractPolicy.min_words}-${abstractPolicy.max_words} words`,\n\n      detected:\n        abstractWordCount\n    });\n  }\n}\n\n\n// ------------------------------------\n// ADD POL-003 CHECK RESULT\n// ------------------------------------\n\nchecks.push({\n  policy_id:\n    abstractPolicy.policy_id,\n\n  code:\n    'ABSTRACT_WORD_COUNT',\n\n  checked:\n    abstractWordCount !== null,\n\n  wordCount:\n    abstractWordCount,\n\n  expected: {\n    min:\n      abstractPolicy.min_words,\n\n    max:\n      abstractPolicy.max_words\n  },\n\n  pass:\n    abstractWordCountPass\n});\n\n\n// ------------------------------------\n// RETURN\n// ------------------------------------\n\nreturn [{\n  json: {\n    ...data,\n\n    validation: {\n      ...(data.validation || {}),\n\n      structure: {\n        status:\n          issues.length === 0\n            ? 'PASS'\n            : 'FAIL',\n\n        issueCount:\n          issues.length,\n\n        checks,\n        issues\n      }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        64
+      ],
+      "id": "98c85699-386e-598a-b6d6-ec5053d2526b",
+      "name": "Validate Required Sections"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst paragraphs = data.paragraphs || [];\nconst issues = [];\n\n\n// ------------------------------------\n// FIND REFERENCES / DECLARATION\n// ------------------------------------\n\nconst referencesIndex = paragraphs.findIndex(\n  p => (p.text || '').trim().toLowerCase() === 'references'\n);\n\nconst declarationIndex = paragraphs.findIndex(\n  p =>\n    (p.text || '')\n      .trim()\n      .toLowerCase()\n      .includes('declaration of authorship')\n);\n\n\n// ------------------------------------\n// REFERENCES SECTION REQUIRED\n// ------------------------------------\n\nif (referencesIndex === -1) {\n  return [{\n    json: {\n      ...data,\n\n      validation: {\n        ...(data.validation || {}),\n\n        citations: {\n          status: 'SKIPPED',\n          reason: 'References section not found',\n          issueCount: 0,\n          issues: []\n        }\n      }\n    }\n  }];\n}\n\n\n// ------------------------------------\n// SPLIT DOCUMENT\n// ------------------------------------\n\nconst bodyParagraphs =\n  paragraphs.slice(0, referencesIndex);\n\nconst referenceParagraphs =\n  paragraphs.slice(\n    referencesIndex + 1,\n    declarationIndex > referencesIndex\n      ? declarationIndex\n      : paragraphs.length\n  );\n\n\n// ------------------------------------\n// EXTRACT CITATIONS\n// ------------------------------------\n\nconst citationKeys = new Set();\n\nfor (const p of bodyParagraphs) {\n\n  const text = p.text || '';\n\n\n  // --------------------------------\n  // PARENTHETICAL CITATIONS\n  //\n  // (Weber, 2021)\n  // (Weber, 2021, p. 42)\n  // (Nakamura et al., 2022)\n  // --------------------------------\n\n  const parenthetical = [\n    ...text.matchAll(\n      /\\(([A-Z][A-Za-zÀ-ÿ'-]+)(?:\\s+et\\s+al\\.)?,\\s*(\\d{4})[^)]*\\)/g\n    )\n  ];\n\n  for (const match of parenthetical) {\n    citationKeys.add(\n      `${match[1].toLowerCase()}|${match[2]}`\n    );\n  }\n\n\n  // --------------------------------\n  // NARRATIVE CITATIONS\n  //\n  // Weber (2021)\n  // Ruiz and Stein (2021)\n  // Ruiz & Stein (2021)\n  // Nakamura et al. (2022)\n  //\n  // Always normalize using\n  // FIRST AUTHOR + YEAR.\n  // --------------------------------\n\n  const narrative = [\n    ...text.matchAll(\n      /\\b([A-Z][A-Za-zÀ-ÿ'-]+)(?:\\s+(?:and|&)\\s+[A-Z][A-Za-zÀ-ÿ'-]+|\\s+et\\s+al\\.)?\\s*\\((\\d{4})\\)/g\n    )\n  ];\n\n  for (const match of narrative) {\n    citationKeys.add(\n      `${match[1].toLowerCase()}|${match[2]}`\n    );\n  }\n}\n\n\n// ------------------------------------\n// EXTRACT REFERENCES\n// ------------------------------------\n\nconst references = [];\n\nfor (const p of referenceParagraphs) {\n\n  const text = (p.text || '').trim();\n\n  if (!text) continue;\n\n\n  // Examples:\n  //\n  // Weber, M. (2021).\n  // Ruiz, L., & Stein, M. (2021).\n\n  const match =\n    text.match(\n      /^([A-Z][A-Za-zÀ-ÿ'-]+).*?\\((\\d{4})\\)/\n    );\n\n  if (!match) continue;\n\n\n  references.push({\n    surname: match[1],\n    year: match[2],\n\n    key:\n      `${match[1].toLowerCase()}|${match[2]}`,\n\n    text\n  });\n}\n\n\nconst referenceKeys =\n  new Set(\n    references.map(ref => ref.key)\n  );\n\n\n// ------------------------------------\n// POL-012\n// CITATION → REFERENCE\n// ------------------------------------\n\nfor (const key of citationKeys) {\n\n  if (!referenceKeys.has(key)) {\n\n    const [surname, year] =\n      key.split('|');\n\n    issues.push({\n      policy_id: 'POL-012',\n      code: 'CITATION_WITHOUT_REFERENCE',\n      severity: 'ERROR',\n\n      evidence:\n        `${surname} (${year})`,\n\n      expected:\n        'Matching References entry',\n\n      detected:\n        'NOT_FOUND'\n    });\n  }\n}\n\n\n// ------------------------------------\n// POL-013\n// REFERENCE → CITATION\n// ------------------------------------\n\nfor (const ref of references) {\n\n  if (!citationKeys.has(ref.key)) {\n\n    issues.push({\n      policy_id: 'POL-013',\n      code: 'UNCITED_REFERENCE',\n      severity: 'ERROR',\n\n      evidence:\n        ref.text.substring(0, 180),\n\n      expected:\n        'At least one in-text citation',\n\n      detected:\n        'NOT_FOUND'\n    });\n  }\n}\n\n\n// ------------------------------------\n// POL-014\n// ALPHABETICAL REFERENCES\n// ------------------------------------\n\nconst actualOrder =\n  references.map(\n    ref => ref.surname.toLowerCase()\n  );\n\nconst expectedOrder =\n  [...actualOrder].sort(\n    (a, b) => a.localeCompare(b)\n  );\n\nconst alphabetical =\n  actualOrder.every(\n    (surname, index) =>\n      surname === expectedOrder[index]\n  );\n\n\nif (!alphabetical) {\n\n  issues.push({\n    policy_id: 'POL-014',\n    code: 'REFERENCES_NOT_ALPHABETICAL',\n    severity: 'ERROR',\n\n    expected: expectedOrder,\n    detected: actualOrder\n  });\n}\n\n\n// ------------------------------------\n// RETURN\n// ------------------------------------\n\nreturn [{\n  json: {\n    ...data,\n\n    citationAnalysis: {\n      citationsDetected:\n        [...citationKeys],\n\n      referencesDetected:\n        references,\n\n      citationCount:\n        citationKeys.size,\n\n      referenceCount:\n        references.length\n    },\n\n    validation: {\n      ...(data.validation || {}),\n\n      citations: {\n        status:\n          issues.length === 0\n            ? 'PASS'\n            : 'FAIL',\n\n        issueCount:\n          issues.length,\n\n        issues\n      }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        64
+      ],
+      "id": "85e13d72-214e-5f73-b0f2-d14ad7860ecf",
+      "name": "Validate Citations & References"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst policies = [\n  {\n    policy_id: 'POL-001',\n    title: 'Title page present',\n    category: 'structure',\n    check_type: 'DETERMINISTIC',\n    description: 'Document must contain a dedicated title page as the first page with paper title, author, course, and date.'\n  },\n  {\n    policy_id: 'POL-002',\n    title: 'Abstract section present',\n    category: 'structure',\n    check_type: 'DETERMINISTIC',\n    description: 'An Abstract section must appear after the title page and before the introduction.'\n  },\n  {\n    policy_id: 'POL-003',\n    title: 'Abstract word count',\n    category: 'structure',\n    check_type: 'SEMANTIC',\n    description: 'Abstract must contain between 150 and 300 words.',\n    min_words: 150,\n    max_words: 300\n  },\n  {\n    policy_id: 'POL-004',\n    title: 'Introduction section present',\n    category: 'structure',\n    check_type: 'DETERMINISTIC',\n    description: 'Document must include an Introduction section.'\n  },\n  {\n    policy_id: 'POL-005',\n    title: 'Conclusion section present',\n    category: 'structure',\n    check_type: 'DETERMINISTIC',\n    description: 'Document must include a Conclusion section.'\n  },\n  {\n    policy_id: 'POL-006',\n    title: 'References section present',\n    category: 'structure',\n    check_type: 'DETERMINISTIC',\n    description: 'Document must include a References section listing all cited works.'\n  },\n  {\n    policy_id: 'POL-007',\n    title: 'Declaration of authorship present',\n    category: 'structure',\n    check_type: 'DETERMINISTIC',\n    description: 'A declaration of authorship must appear on a separate final page.'\n  },\n  {\n    policy_id: 'POL-008',\n    title: 'Body font family',\n    category: 'typography',\n    check_type: 'LAYOUT',\n    description: 'Body text must use Times New Roman.',\n    scope: 'BODY',\n    expected: 'Times New Roman'\n  },\n  {\n    policy_id: 'POL-009',\n    title: 'Body font size',\n    category: 'typography',\n    check_type: 'LAYOUT',\n    description: 'Body text must be 12 pt.',\n    scope: 'BODY',\n    expected: 12\n  },\n  {\n    policy_id: 'POL-010',\n    title: 'Line spacing',\n    category: 'typography',\n    check_type: 'LAYOUT',\n    description: 'Main text must use 1.5 line spacing.',\n    scope: 'BODY',\n    expected: 1.5\n  },\n  {\n    policy_id: 'POL-011',\n    title: 'Page margins',\n    category: 'layout',\n    check_type: 'LAYOUT',\n    description: 'All margins must be 2.5 cm.',\n    expected: 2.5\n  },\n  {\n    policy_id: 'POL-012',\n    title: 'In-text citations have reference entries',\n    category: 'citations',\n    check_type: 'DETERMINISTIC',\n    description: 'Every in-text citation must have a matching entry in References.'\n  },\n  {\n    policy_id: 'POL-013',\n    title: 'Reference entries are cited in text',\n    category: 'citations',\n    check_type: 'DETERMINISTIC',\n    description: 'Every reference list entry must appear at least once as an in-text citation.'\n  },\n  {\n    policy_id: 'POL-014',\n    title: 'References alphabetically ordered',\n    category: 'citations',\n    check_type: 'DETERMINISTIC',\n    description: 'References must be sorted alphabetically by first author surname.'\n  },\n  {\n    policy_id: 'POL-015',\n    title: 'Long direct quotations as block quotes',\n    category: 'citations',\n    check_type: 'SEMANTIC',\n    description: 'Direct quotations of 40 words or more must be formatted as indented block quotes without quotation marks.',\n    min_block_quote_words: 40\n  },\n  {\n    policy_id: 'POL-016',\n    title: 'Figure captions present',\n    category: 'figures',\n    check_type: 'DETERMINISTIC',\n    description: 'Every figure must have a caption directly below it beginning with Figure N.'\n  },\n  {\n    policy_id: 'POL-017',\n    title: 'Figure source credits',\n    category: 'figures',\n    check_type: 'DETERMINISTIC',\n    description: 'Figures not created by the author must include a source credit in or below the caption.'\n  },\n  {\n    policy_id: 'POL-018',\n    title: 'Heading hierarchy consistency',\n    category: 'structure',\n    check_type: 'LAYOUT',\n    description: 'Do not skip heading levels.'\n  }\n];\n\nreturn [{\n  json: {\n    ...data,\n\n    policyPack: {\n      id: 'example-academic-policy',\n      institution: 'Example institution',\n      faculty: 'Example faculty',\n      documentFormat: 'docx',\n      version: '2025-26',\n      policies\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        64
+      ],
+      "id": "6366badc-a0a7-5347-8a65-e7d31f20dcf8",
+      "name": "Load University Policy"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst policies = data.policyPack?.policies || [];\n\nconst marginPolicy = policies.find(\n  p => p.policy_id === 'POL-011'\n);\n\nif (!marginPolicy) {\n  throw new Error(\n    'POL-011 not found in policyPack.'\n  );\n}\n\n\n// ------------------------------------\n// DOCUMENT FACTS\n// ------------------------------------\n\nconst margins =\n  data.layout?.margins;\n\nconst expected =\n  marginPolicy.expected;\n\nconst issues = [];\n\n\n// ------------------------------------\n// CHECK MARGIN DATA EXISTS\n// ------------------------------------\n\nif (!margins) {\n\n  issues.push({\n    policy_id: marginPolicy.policy_id,\n    code: 'MARGINS_NOT_DETECTED',\n    severity: 'ERROR',\n    expected: `${expected} cm on all sides`,\n    detected: 'NOT_FOUND'\n  });\n\n} else {\n\n  // Small tolerance for DOCX/twip conversion.\n  const tolerance = 0.05;\n\n  const sides = [\n    'top',\n    'right',\n    'bottom',\n    'left'\n  ];\n\n\n  // ----------------------------------\n  // VALIDATE EACH SIDE\n  // ----------------------------------\n\n  for (const side of sides) {\n\n    const detected =\n      margins[side];\n\n    const valid =\n      detected !== null &&\n      detected !== undefined &&\n      Math.abs(detected - expected) <= tolerance;\n\n\n    if (!valid) {\n\n      issues.push({\n        policy_id: marginPolicy.policy_id,\n        code: 'INVALID_MARGIN',\n        severity: 'ERROR',\n        side,\n        expected: `${expected} cm`,\n        detected:\n          detected !== null &&\n          detected !== undefined\n            ? `${detected} cm`\n            : 'NOT_FOUND'\n      });\n    }\n  }\n}\n\n\n// ------------------------------------\n// RETURN\n// ------------------------------------\n\nreturn [{\n  json: {\n    ...data,\n\n    validation: {\n      ...(data.validation || {}),\n\n      margins: {\n        status:\n          issues.length === 0\n            ? 'PASS'\n            : 'FAIL',\n\n        expected: {\n          top: expected,\n          right: expected,\n          bottom: expected,\n          left: expected\n        },\n\n        detected:\n          margins || null,\n\n        issueCount:\n          issues.length,\n\n        issues\n      }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        64
+      ],
+      "id": "8afd9901-0909-597f-b174-b8b050384920",
+      "name": "Validate Margins"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst paragraphs = data.paragraphs || [];\nconst policies = data.policyPack?.policies || [];\n\nconst policy = policies.find(\n  p => p.policy_id === 'POL-018'\n);\n\nif (!policy) {\n  throw new Error(\n    'POL-018 not found in policyPack.'\n  );\n}\n\nconst issues = [];\n\n\n// ------------------------------------\n// EXTRACT HEADINGS\n// ------------------------------------\n\nconst headings = paragraphs\n  .map(p => {\n\n    const match =\n      (p.style || '').match(\n        /^Heading\\s*(\\d+)$/i\n      );\n\n    if (!match) return null;\n\n    return {\n      paragraphIndex: p.index,\n      text: p.text,\n      style: p.style,\n      level: Number(match[1])\n    };\n  })\n  .filter(Boolean);\n\n\n// ------------------------------------\n// CHECK FOR SKIPPED LEVELS\n// ------------------------------------\n\nfor (let i = 1; i < headings.length; i++) {\n\n  const previous = headings[i - 1];\n  const current = headings[i];\n\n  // Example:\n  // Heading1 → Heading2 = valid\n  // Heading2 → Heading3 = valid\n  // Heading1 → Heading3 = invalid\n\n  if (\n    current.level >\n    previous.level + 1\n  ) {\n\n    issues.push({\n      policy_id: policy.policy_id,\n      code: 'HEADING_LEVEL_SKIPPED',\n      severity: 'ERROR',\n\n      paragraphIndex:\n        current.paragraphIndex,\n\n      evidence:\n        current.text,\n\n      expected:\n        `Maximum next level: Heading${previous.level + 1}`,\n\n      detected:\n        current.style,\n\n      previousHeading: {\n        text: previous.text,\n        style: previous.style\n      }\n    });\n  }\n}\n\n\n// ------------------------------------\n// FIRST HEADING CHECK\n// ------------------------------------\n\nif (\n  headings.length > 0 &&\n  headings[0].level !== 1\n) {\n\n  issues.push({\n    policy_id: policy.policy_id,\n    code: 'INVALID_FIRST_HEADING_LEVEL',\n    severity: 'ERROR',\n\n    evidence:\n      headings[0].text,\n\n    expected:\n      'Heading1',\n\n    detected:\n      headings[0].style\n  });\n}\n\n\n// ------------------------------------\n// RETURN\n// ------------------------------------\n\nreturn [{\n  json: {\n    ...data,\n\n    validation: {\n      ...(data.validation || {}),\n\n      headings: {\n        status:\n          issues.length === 0\n            ? 'PASS'\n            : 'FAIL',\n\n        headingCount:\n          headings.length,\n\n        headings,\n\n        issueCount:\n          issues.length,\n\n        issues\n      }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        48
+      ],
+      "id": "359ed79a-d3df-5ccc-8bdf-b008b436bb49",
+      "name": "Validate Heading Hierarchy"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst paragraphs = data.paragraphs || [];\nconst policies = data.policyPack?.policies || [];\n\n\n// ==================================================\n// POLICIES\n// ==================================================\n\nconst captionPolicy = policies.find(\n  p => p.policy_id === 'POL-016'\n);\n\nconst sourcePolicy = policies.find(\n  p => p.policy_id === 'POL-017'\n);\n\n\nif (!captionPolicy) {\n  throw new Error(\n    'POL-016 not found in policyPack.'\n  );\n}\n\nif (!sourcePolicy) {\n  throw new Error(\n    'POL-017 not found in policyPack.'\n  );\n}\n\n\n// ==================================================\n// HELPERS\n// ==================================================\n\nfunction findNextTextParagraph(startPosition) {\n\n  for (\n    let i = startPosition + 1;\n    i < paragraphs.length;\n    i++\n  ) {\n\n    const paragraph = paragraphs[i];\n\n    if (\n      paragraph.text &&\n      paragraph.text.trim().length > 0\n    ) {\n      return paragraph;\n    }\n  }\n\n  return null;\n}\n\n\n// ==================================================\n// FIND FIGURES\n// ==================================================\n\nconst figureParagraphs =\n  paragraphs\n    .map((paragraph, position) => ({\n      paragraph,\n      position\n    }))\n    .filter(\n      item =>\n        item.paragraph.hasFigure === true\n    );\n\n\nconst figureResults = [];\n\nconst captionIssues = [];\nconst sourceIssues = [];\n\n\n// ==================================================\n// VALIDATE EACH FIGURE\n// ==================================================\n\nfor (\n  let figureIndex = 0;\n  figureIndex < figureParagraphs.length;\n  figureIndex++\n) {\n\n  const figureItem =\n    figureParagraphs[figureIndex];\n\n  const figureParagraph =\n    figureItem.paragraph;\n\n  const expectedFigureNumber =\n    figureIndex + 1;\n\n\n  // ------------------------------------------------\n  // FIND CAPTION\n  // ------------------------------------------------\n\n  const captionParagraph =\n    findNextTextParagraph(\n      figureItem.position\n    );\n\n\n  const captionText =\n    captionParagraph?.text?.trim() || '';\n\n\n  // Caption must begin:\n  //\n  // Figure 1\n  // Figure 1.\n  // Figure 1:\n  //\n  // etc.\n\n  const captionRegex =\n    new RegExp(\n      `^Figure\\\\s+${expectedFigureNumber}(?:[\\\\s.:–—-]|$)`,\n      'i'\n    );\n\n\n  const hasValidCaption =\n    captionRegex.test(captionText);\n\n\n  // ------------------------------------------------\n  // POL-016 — CAPTION\n  // ------------------------------------------------\n\n  if (!hasValidCaption) {\n\n    captionIssues.push({\n\n      policy_id:\n        captionPolicy.policy_id,\n\n      code:\n        'FIGURE_CAPTION_MISSING_OR_INVALID',\n\n      severity:\n        'ERROR',\n\n      figureNumber:\n        expectedFigureNumber,\n\n      figureParagraphIndex:\n        figureParagraph.index,\n\n      expected:\n        `Caption directly below figure beginning with \"Figure ${expectedFigureNumber}\"`,\n\n      detected:\n        captionText || 'NO CAPTION FOUND'\n    });\n  }\n\n\n  // ------------------------------------------------\n  // POL-017 — SOURCE CREDIT\n  // ------------------------------------------------\n\n  let hasSourceCredit = false;\n  let sourceEvidence = null;\n\n\n  if (hasValidCaption) {\n\n    // Source may be inside the caption itself.\n    //\n    // Example:\n    // Figure 1. ... Source: Own illustration\n\n    if (\n      /\\bsource\\s*:/i.test(\n        captionText\n      )\n    ) {\n\n      hasSourceCredit = true;\n      sourceEvidence =\n        captionText;\n\n    } else {\n\n      // Or source may be in the paragraph\n      // immediately below the caption.\n\n      const captionPosition =\n        paragraphs.findIndex(\n          p =>\n            p.index ===\n            captionParagraph.index\n        );\n\n\n      const possibleSourceParagraph =\n        findNextTextParagraph(\n          captionPosition\n        );\n\n\n      const possibleSourceText =\n        possibleSourceParagraph\n          ?.text\n          ?.trim() || '';\n\n\n      if (\n        /^source\\s*:/i.test(\n          possibleSourceText\n        )\n      ) {\n\n        hasSourceCredit = true;\n        sourceEvidence =\n          possibleSourceText;\n      }\n    }\n  }\n\n\n  if (!hasSourceCredit) {\n\n    sourceIssues.push({\n\n      policy_id:\n        sourcePolicy.policy_id,\n\n      code:\n        'FIGURE_SOURCE_CREDIT_MISSING',\n\n      severity:\n        'ERROR',\n\n      figureNumber:\n        expectedFigureNumber,\n\n      figureParagraphIndex:\n        figureParagraph.index,\n\n      expected:\n        'Source credit in or directly below figure caption',\n\n      detected:\n        captionText || 'NO CAPTION FOUND'\n    });\n  }\n\n\n  // ------------------------------------------------\n  // STORE FIGURE RESULT\n  // ------------------------------------------------\n\n  figureResults.push({\n\n    figureNumber:\n      expectedFigureNumber,\n\n    figureParagraphIndex:\n      figureParagraph.index,\n\n    drawingCount:\n      figureParagraph.drawingCount,\n\n    captionParagraphIndex:\n      captionParagraph?.index ?? null,\n\n    caption:\n      captionText || null,\n\n    hasValidCaption,\n\n    hasSourceCredit,\n\n    sourceEvidence\n  });\n}\n\n\n// ==================================================\n// POL-016 RESULT\n// ==================================================\n\nconst captionValidation = {\n\n  policy_id:\n    captionPolicy.policy_id,\n\n  status:\n    captionIssues.length === 0\n      ? 'PASS'\n      : 'FAIL',\n\n  figuresChecked:\n    figureParagraphs.length,\n\n  issueCount:\n    captionIssues.length,\n\n  issues:\n    captionIssues\n};\n\n\n// ==================================================\n// POL-017 RESULT\n// ==================================================\n\nconst sourceValidation = {\n\n  policy_id:\n    sourcePolicy.policy_id,\n\n  status:\n    sourceIssues.length === 0\n      ? 'PASS'\n      : 'FAIL',\n\n  figuresChecked:\n    figureParagraphs.length,\n\n  issueCount:\n    sourceIssues.length,\n\n  issues:\n    sourceIssues\n};\n\n\n// ==================================================\n// OVERALL FIGURE RESULT\n// ==================================================\n\nconst allIssues = [\n  ...captionIssues,\n  ...sourceIssues\n];\n\n\nconst overallStatus =\n  allIssues.length === 0\n    ? 'PASS'\n    : 'FAIL';\n\n\n// ==================================================\n// RETURN\n// ==================================================\n\nreturn [{\n  json: {\n    ...data,\n\n    validation: {\n      ...(data.validation || {}),\n\n      figures: {\n\n        status:\n          overallStatus,\n\n        figureCount:\n          figureParagraphs.length,\n\n        figures:\n          figureResults,\n\n        policies: {\n          POL_016:\n            captionValidation,\n\n          POL_017:\n            sourceValidation\n        },\n\n        issueCount:\n          allIssues.length,\n\n        issues:\n          allIssues\n      }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        288
+      ],
+      "id": "13ac3a52-732f-563f-9eb1-876bd7df099d",
+      "name": "Validate Figures"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst paragraphs = data.paragraphs || [];\nconst policies = data.policyPack?.policies || [];\n\n\n// ==================================================\n// POLICY\n// ==================================================\n\nconst policy = policies.find(\n  p => p.policy_id === 'POL-015'\n);\n\nif (!policy) {\n  throw new Error(\n    'POL-015 not found in policyPack.'\n  );\n}\n\n\nconst minimumWords =\n  policy.min_block_quote_words ?? 40;\n\n\n// ==================================================\n// HELPERS\n// ==================================================\n\nfunction countWords(text = '') {\n\n  return text\n    .trim()\n    .split(/\\s+/)\n    .filter(Boolean)\n    .length;\n}\n\n\nfunction isIndented(paragraph) {\n\n  const indentation =\n    paragraph.indentation || {};\n\n  const left =\n    indentation.leftTwips;\n\n  // Any meaningful positive left indentation\n  // is treated as structural block-quote evidence.\n  //\n  // 360 twips ≈ 0.64 cm.\n  // This avoids treating tiny formatting noise\n  // as a block quotation.\n\n  return (\n    left !== null &&\n    left !== undefined &&\n    left >= 360\n  );\n}\n\n\n// ==================================================\n// BODY SCOPE\n// ==================================================\n\n// We do not want quotation marks appearing inside\n// the References or Declaration sections to trigger\n// long-quote validation.\n\nconst referencesPosition =\n  paragraphs.findIndex(\n    p =>\n      p.text.trim().toLowerCase() ===\n      'references'\n  );\n\n\nconst bodyParagraphs =\n  referencesPosition >= 0\n    ? paragraphs.slice(0, referencesPosition)\n    : paragraphs;\n\n\n// ==================================================\n// DETECT QUOTED PASSAGES\n// ==================================================\n\n// Detect:\n// \"quoted text\"\n// “quoted text”\n//\n// The regex intentionally operates paragraph-by-\n// paragraph. A quotation spanning several paragraphs\n// becomes ambiguous and should not be silently judged.\n\nconst quotePatterns = [\n\n  /\"([^\"]+)\"/g,\n\n  /“([^”]+)”/g\n];\n\n\nconst candidates = [];\n\n\n// ==================================================\n// ANALYSE PARAGRAPHS\n// ==================================================\n\nfor (const paragraph of bodyParagraphs) {\n\n  const text =\n    paragraph.text || '';\n\n  if (!text.trim()) {\n    continue;\n  }\n\n\n  for (const pattern of quotePatterns) {\n\n    pattern.lastIndex = 0;\n\n    let match;\n\n\n    while (\n      (match = pattern.exec(text)) !== null\n    ) {\n\n      const quoteText =\n        match[1].trim();\n\n\n      const wordCount =\n        countWords(\n          quoteText\n        );\n\n\n      if (\n        wordCount < minimumWords\n      ) {\n        continue;\n      }\n\n\n      const indented =\n        isIndented(\n          paragraph\n        );\n\n\n      candidates.push({\n\n        paragraphIndex:\n          paragraph.index,\n\n        quoteText,\n\n        wordCount,\n\n        indentation:\n          paragraph.indentation,\n\n        structurallyIndented:\n          indented,\n\n        hasQuotationMarks:\n          true\n      });\n    }\n  }\n}\n\n\n// ==================================================\n// CLASSIFY CANDIDATES\n// ==================================================\n\nconst issues = [];\n\nconst reviewItems = [];\n\n\nfor (const candidate of candidates) {\n\n\n  // ------------------------------------------------\n  // CLEAR INLINE LONG QUOTATION\n  // ------------------------------------------------\n  //\n  // 40+ words\n  // quotation marks\n  // no block indentation\n  //\n  // This is strong evidence that POL-015 has been\n  // violated.\n\n  if (\n    !candidate.structurallyIndented\n  ) {\n\n    issues.push({\n\n      policy_id:\n        policy.policy_id,\n\n      code:\n        'LONG_QUOTE_NOT_BLOCK_FORMATTED',\n\n      severity:\n        'ERROR',\n\n      paragraphIndex:\n        candidate.paragraphIndex,\n\n      wordCount:\n        candidate.wordCount,\n\n      expected:\n        `${minimumWords}+ word direct quotations must use block formatting without quotation marks`,\n\n      detected:\n        'Long quotation enclosed in quotation marks without block indentation',\n\n      evidence:\n        candidate.quoteText\n    });\n\n    continue;\n  }\n\n\n  // ------------------------------------------------\n  // INDENTED BUT STILL HAS QUOTATION MARKS\n  // ------------------------------------------------\n  //\n  // Structurally this looks like a block quote,\n  // but it still uses quotation marks.\n  //\n  // We preserve this as a review case instead of\n  // pretending the formatting is unquestionably\n  // correct.\n\n  reviewItems.push({\n\n    policy_id:\n      policy.policy_id,\n\n    code:\n      'LONG_QUOTE_REQUIRES_REVIEW',\n\n    severity:\n      'REVIEW',\n\n    paragraphIndex:\n      candidate.paragraphIndex,\n\n    wordCount:\n      candidate.wordCount,\n\n    reason:\n      'Long quotation is indented but still contains quotation marks.',\n\n    evidence:\n      candidate.quoteText\n  });\n}\n\n\n// ==================================================\n// DETECT POSSIBLE UNQUOTED BLOCK QUOTES\n// ==================================================\n//\n// An indented paragraph with 40+ words may be a\n// correctly formatted block quotation.\n//\n// But indentation alone cannot prove that the text\n// is actually a quotation.\n//\n// This is exactly the kind of ambiguity we should\n// surface instead of forcing a deterministic answer.\n\nfor (const paragraph of bodyParagraphs) {\n\n  const text =\n    paragraph.text?.trim() || '';\n\n\n  if (!text) {\n    continue;\n  }\n\n\n  const wordCount =\n    countWords(\n      text\n    );\n\n\n  if (\n    wordCount < minimumWords\n  ) {\n    continue;\n  }\n\n\n  if (\n    !isIndented(paragraph)\n  ) {\n    continue;\n  }\n\n\n  // Avoid duplicating paragraphs already detected\n  // through explicit quotation marks.\n\n  const alreadyDetected =\n    candidates.some(\n      candidate =>\n        candidate.paragraphIndex ===\n        paragraph.index\n    );\n\n\n  if (alreadyDetected) {\n    continue;\n  }\n\n\n  reviewItems.push({\n\n    policy_id:\n      policy.policy_id,\n\n    code:\n      'POSSIBLE_BLOCK_QUOTE',\n\n    severity:\n      'REVIEW',\n\n    paragraphIndex:\n      paragraph.index,\n\n    wordCount,\n\n    reason:\n      'Paragraph is long and structurally indented. It may be a correctly formatted block quotation and requires semantic confirmation.',\n\n    evidence:\n      text\n  });\n}\n\n\n// ==================================================\n// FINAL STATUS\n// ==================================================\n\nlet status = 'PASS';\n\n\nif (issues.length > 0) {\n\n  status = 'FAIL';\n\n} else if (\n  reviewItems.length > 0\n) {\n\n  status = 'REVIEW_REQUIRED';\n}\n\n\n// ==================================================\n// RETURN\n// ==================================================\n\nreturn [{\n  json: {\n    ...data,\n\n    validation: {\n      ...(data.validation || {}),\n\n      longQuotations: {\n\n        policy_id:\n          policy.policy_id,\n\n        status,\n\n        minimumWords,\n\n        candidateCount:\n          candidates.length,\n\n        candidates,\n\n        issueCount:\n          issues.length,\n\n        issues,\n\n        reviewCount:\n          reviewItems.length,\n\n        reviewItems\n      }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        288
+      ],
+      "id": "e8e73e81-b0b7-5855-84cc-f02b878b305c",
+      "name": "Validate Long Quotations"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst validation = data.validation || {};\nconst policies = data.policyPack?.policies || [];\n\n\n// ==================================================\n// HELPERS\n// ==================================================\n\nfunction policyName(policyId) {\n\n  const policy =\n    policies.find(\n      p => p.policy_id === policyId\n    );\n\n  return (\n    policy?.name ||\n    policy?.title ||\n    policy?.description ||\n    policyId\n  );\n}\n\n\nfunction normalizeStatus(status) {\n\n  if (!status) {\n    return 'NOT_CHECKED';\n  }\n\n  const value =\n    String(status).toUpperCase();\n\n  if (value === 'PASS') {\n    return 'PASS';\n  }\n\n  if (value === 'FAIL') {\n    return 'FAIL';\n  }\n\n  if (\n    value === 'REVIEW' ||\n    value === 'REVIEW_REQUIRED'\n  ) {\n    return 'REVIEW_REQUIRED';\n  }\n\n  return 'NOT_CHECKED';\n}\n\n\nfunction shortenEvidence(\n  value,\n  maxLength = 220\n) {\n\n  if (\n    value === null ||\n    value === undefined\n  ) {\n    return null;\n  }\n\n  const text =\n    typeof value === 'string'\n      ? value\n      : JSON.stringify(value);\n\n  return text.length <= maxLength\n    ? text\n    : text.slice(0, maxLength) + '…';\n}\n\n\n// ==================================================\n// CATEGORY MAP\n// ==================================================\n\nconst categoryMap = {\n\n  'POL-001': 'STRUCTURE',\n  'POL-002': 'STRUCTURE',\n  'POL-003': 'STRUCTURE',\n  'POL-004': 'STRUCTURE',\n  'POL-005': 'STRUCTURE',\n  'POL-006': 'STRUCTURE',\n  'POL-007': 'STRUCTURE',\n\n  'POL-008': 'FORMATTING',\n  'POL-009': 'FORMATTING',\n  'POL-010': 'FORMATTING',\n\n  'POL-011': 'LAYOUT',\n\n  'POL-012': 'CITATIONS',\n  'POL-013': 'CITATIONS',\n  'POL-014': 'CITATIONS',\n\n  'POL-015': 'QUOTATIONS',\n\n  'POL-016': 'FIGURES',\n  'POL-017': 'FIGURES',\n\n  'POL-018': 'STRUCTURE'\n};\n\n\n// ==================================================\n// RESULTS\n// ==================================================\n\nconst results = [];\n\n\n// ==================================================\n// POL-001 → POL-007\n// STRUCTURAL CHECKS\n// ==================================================\n\nconst structure =\n  validation.structure || {};\n\nconst structureChecks =\n  structure.checks || [];\n\n\nfor (const policyId of [\n  'POL-001',\n  'POL-002',\n  'POL-003',\n  'POL-004',\n  'POL-005',\n  'POL-006',\n  'POL-007'\n]) {\n\n  const check =\n    structureChecks.find(\n      item =>\n        item.policy_id === policyId\n    );\n\n\n  let status =\n    'NOT_CHECKED';\n\n\n  if (check) {\n\n    // POL-003 uses \"pass\".\n    if (\n      typeof check.pass === 'boolean'\n    ) {\n\n      status =\n        check.pass\n          ? 'PASS'\n          : 'FAIL';\n    }\n\n    // Other structural checks use \"present\".\n    else if (\n      typeof check.present === 'boolean'\n    ) {\n\n      status =\n        check.present\n          ? 'PASS'\n          : 'FAIL';\n    }\n  }\n\n\n  const issues =\n    (structure.issues || [])\n      .filter(\n        issue =>\n          issue.policy_id === policyId\n      );\n\n\n  results.push({\n\n    policy_id:\n      policyId,\n\n    name:\n      policyName(policyId),\n\n    category:\n      categoryMap[policyId],\n\n    status,\n\n    issues\n  });\n}\n\n\n// ==================================================\n// POL-008 → POL-010\n// FORMATTING\n// ==================================================\n//\n// Current formatting validator returns an aggregate\n// result for these three policies.\n//\n// If the formatting validator passes, all three\n// formatting policies passed.\n//\n// On failure, we inspect issue.policy_id where\n// available to identify the affected rule.\n// ==================================================\n\nconst formatting =\n  validation.formatting || {};\n\n\nfor (const policyId of [\n  'POL-008',\n  'POL-009',\n  'POL-010'\n]) {\n\n  const policyIssues =\n    (formatting.issues || [])\n      .filter(\n        issue =>\n          issue.policy_id === policyId\n      );\n\n\n  let status =\n    'NOT_CHECKED';\n\n\n  if (\n    formatting.status === 'PASS'\n  ) {\n\n    status = 'PASS';\n\n  } else if (\n    formatting.status === 'FAIL'\n  ) {\n\n    status =\n      policyIssues.length > 0\n        ? 'FAIL'\n        : 'PASS';\n  }\n\n\n  results.push({\n\n    policy_id:\n      policyId,\n\n    name:\n      policyName(policyId),\n\n    category:\n      categoryMap[policyId],\n\n    status,\n\n    issues:\n      policyIssues\n  });\n}\n\n\n// ==================================================\n// POL-011\n// MARGINS\n// ==================================================\n\nconst margins =\n  validation.margins;\n\n\nresults.push({\n\n  policy_id:\n    'POL-011',\n\n  name:\n    policyName('POL-011'),\n\n  category:\n    categoryMap['POL-011'],\n\n  status:\n    margins\n      ? normalizeStatus(\n          margins.status\n        )\n      : 'NOT_CHECKED',\n\n  issues:\n    margins?.issues || []\n});\n\n\n// ==================================================\n// POL-012 → POL-014\n// CITATIONS\n// ==================================================\n//\n// Like formatting, the current citation validator\n// exposes an aggregate status.\n//\n// PASS means all three citation policies passed.\n//\n// On FAIL we use policy_id on individual issues to\n// determine which policy failed.\n// ==================================================\n\nconst citations =\n  validation.citations || {};\n\n\nfor (const policyId of [\n  'POL-012',\n  'POL-013',\n  'POL-014'\n]) {\n\n  const policyIssues =\n    (citations.issues || [])\n      .filter(\n        issue =>\n          issue.policy_id === policyId\n      );\n\n\n  let status =\n    'NOT_CHECKED';\n\n\n  if (\n    citations.status === 'PASS'\n  ) {\n\n    status = 'PASS';\n\n  } else if (\n    citations.status === 'FAIL'\n  ) {\n\n    status =\n      policyIssues.length > 0\n        ? 'FAIL'\n        : 'PASS';\n  }\n\n\n  results.push({\n\n    policy_id:\n      policyId,\n\n    name:\n      policyName(policyId),\n\n    category:\n      categoryMap[policyId],\n\n    status,\n\n    issues:\n      policyIssues\n  });\n}\n\n\n// ==================================================\n// POL-015\n// LONG QUOTATIONS\n// ==================================================\n\nconst longQuotations =\n  validation.longQuotations;\n\n\nresults.push({\n\n  policy_id:\n    'POL-015',\n\n  name:\n    policyName('POL-015'),\n\n  category:\n    categoryMap['POL-015'],\n\n  status:\n    longQuotations\n      ? normalizeStatus(\n          longQuotations.status\n        )\n      : 'NOT_CHECKED',\n\n  issues: [\n    ...(\n      longQuotations?.issues || []\n    ),\n    ...(\n      longQuotations?.reviewItems || []\n    )\n  ]\n});\n\n\n// ==================================================\n// POL-016 / POL-017\n// FIGURES\n// ==================================================\n\nconst figures =\n  validation.figures || {};\n\n\nfor (const policyId of [\n  'POL-016',\n  'POL-017'\n]) {\n\n  const key =\n    policyId.replace(\n      '-',\n      '_'\n    );\n\n\n  const result =\n    figures.policies?.[key];\n\n\n  results.push({\n\n    policy_id:\n      policyId,\n\n    name:\n      policyName(policyId),\n\n    category:\n      categoryMap[policyId],\n\n    status:\n      result\n        ? normalizeStatus(\n            result.status\n          )\n        : 'NOT_CHECKED',\n\n    issues:\n      result?.issues || []\n  });\n}\n\n\n// ==================================================\n// POL-018\n// HEADING HIERARCHY\n// ==================================================\n\nconst headings =\n  validation.headings;\n\n\nresults.push({\n\n  policy_id:\n    'POL-018',\n\n  name:\n    policyName('POL-018'),\n\n  category:\n    categoryMap['POL-018'],\n\n  status:\n    headings\n      ? normalizeStatus(\n          headings.status\n        )\n      : 'NOT_CHECKED',\n\n  issues:\n    headings?.issues || []\n});\n\n\n// ==================================================\n// SORT\n// ==================================================\n\nresults.sort(\n  (a, b) =>\n    a.policy_id.localeCompare(\n      b.policy_id\n    )\n);\n\n\n// ==================================================\n// COUNTS\n// ==================================================\n\nconst counts = {\n\n  total:\n    results.length,\n\n  passed:\n    results.filter(\n      r => r.status === 'PASS'\n    ).length,\n\n  failed:\n    results.filter(\n      r => r.status === 'FAIL'\n    ).length,\n\n  reviewRequired:\n    results.filter(\n      r =>\n        r.status ===\n        'REVIEW_REQUIRED'\n    ).length,\n\n  notChecked:\n    results.filter(\n      r =>\n        r.status ===\n        'NOT_CHECKED'\n    ).length\n};\n\n\n// ==================================================\n// OVERALL STATUS\n// ==================================================\n\nlet overallStatus =\n  'PASS';\n\n\nif (\n  counts.failed > 0\n) {\n\n  overallStatus =\n    'FAIL';\n\n} else if (\n  counts.reviewRequired > 0 ||\n  counts.notChecked > 0\n) {\n\n  overallStatus =\n    'REVIEW_REQUIRED';\n}\n\n\n// ==================================================\n// FLATTEN ISSUES\n// ==================================================\n\nconst issues = [];\n\n\nfor (const result of results) {\n\n  for (\n    const issue of result.issues\n  ) {\n\n    issues.push({\n\n      policy_id:\n        result.policy_id,\n\n      policy:\n        result.name,\n\n      category:\n        result.category,\n\n      status:\n        result.status,\n\n      severity:\n        issue.severity ||\n        (\n          result.status === 'FAIL'\n            ? 'ERROR'\n            : 'REVIEW'\n        ),\n\n      code:\n        issue.code || null,\n\n      paragraphIndex:\n        issue.paragraphIndex ??\n        issue.figureParagraphIndex ??\n        null,\n\n      expected:\n        issue.expected ?? null,\n\n      detected:\n        issue.detected ?? null,\n\n      reason:\n        issue.reason ?? null,\n\n      evidence:\n        shortenEvidence(\n          issue.evidence\n        )\n    });\n  }\n}\n\n\n// ==================================================\n// SUMMARY\n// ==================================================\n\nlet summary;\n\n\nif (\n  overallStatus === 'PASS'\n) {\n\n  summary =\n    `PASS — ${counts.passed}/${counts.total} university policies passed. No compliance issues were detected.`;\n\n} else if (\n  overallStatus === 'FAIL'\n) {\n\n  summary =\n    `FAIL — ${counts.failed} policy check(s) failed. ${counts.passed}/${counts.total} policies passed.`;\n\n} else {\n\n  summary =\n    `REVIEW REQUIRED — ${counts.reviewRequired} policy check(s) require review and ${counts.notChecked} were not checked automatically.`;\n}\n\n\n// ==================================================\n// FINAL REPORT\n// ==================================================\n\nreturn [{\n  json: {\n\n    system:\n      'PAPERGUARD',\n\n    sourceFile:\n      data.sourceFile || null,\n\n    policyPack: {\n\n      id:\n        data.policyPack?.id ||\n        null,\n\n      institution:\n        data.policyPack\n          ?.institution ||\n        null,\n\n      version:\n        data.policyPack\n          ?.version ||\n        null\n    },\n\n    overallStatus,\n\n    summary,\n\n    counts,\n\n    issues,\n\n    policies:\n      results.map(\n        result => ({\n\n          policy_id:\n            result.policy_id,\n\n          name:\n            result.name,\n\n          category:\n            result.category,\n\n          status:\n            result.status,\n\n          issueCount:\n            result.issues.length\n        })\n      ),\n\n    documentStats:\n      data.stats || null,\n\n    generatedAt:\n      new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        288
+      ],
+      "id": "0a49df48-f47c-58e7-8d69-21de22eea6bf",
+      "name": "Build PAPERGUARD Report"
+    },
+    {
+      "parameters": {
+        "jsCode": "const report = $input.first().json;\n\nconst status = report.overallStatus;\nconst counts = report.counts || {};\nconst issues = report.issues || [];\n\n\n// ============================================\n// STATUS DISPLAY\n// ============================================\n\nlet statusTitle;\nlet statusMessage;\n\nif (status === 'PASS') {\n\n  statusTitle = '✓ PAPER PASSED';\n\n  statusMessage =\n    'Your paper meets all automatically checked requirements of the configured university policy.';\n\n} else if (status === 'FAIL') {\n\n  statusTitle = '✕ CHANGES REQUIRED';\n\n  statusMessage =\n    'Your paper does not currently meet all requirements of the configured university policy.';\n\n} else {\n\n  statusTitle = '⚠ REVIEW REQUIRED';\n\n  statusMessage =\n    'Some requirements could not be evaluated conclusively and require review.';\n}\n\n\n// ============================================\n// CATEGORY SUMMARY\n// ============================================\n\nconst categoryNames = {\n  STRUCTURE: 'Structure',\n  FORMATTING: 'Formatting',\n  LAYOUT: 'Layout',\n  CITATIONS: 'Citations & References',\n  QUOTATIONS: 'Quotations',\n  FIGURES: 'Figures'\n};\n\nconst categories = {};\n\nfor (const policy of report.policies || []) {\n\n  const category =\n    policy.category || 'OTHER';\n\n  if (!categories[category]) {\n\n    categories[category] = {\n      total: 0,\n      passed: 0,\n      failed: 0,\n      review: 0\n    };\n  }\n\n  categories[category].total++;\n\n  if (policy.status === 'PASS') {\n    categories[category].passed++;\n  }\n\n  if (policy.status === 'FAIL') {\n    categories[category].failed++;\n  }\n\n  if (policy.status === 'REVIEW_REQUIRED') {\n    categories[category].review++;\n  }\n}\n\n\nconst categorySummary =\n  Object.entries(categories)\n    .map(([key, value]) => {\n\n      let status = 'PASS';\n\n      if (value.failed > 0) {\n        status = 'FAIL';\n      } else if (value.review > 0) {\n        status = 'REVIEW_REQUIRED';\n      }\n\n      return {\n        category: key,\n        label: categoryNames[key] || key,\n        status,\n        passed: value.passed,\n        total: value.total\n      };\n    });\n\n\n// ============================================\n// HUMAN-READABLE ISSUES\n// ============================================\n\nconst issueSummary =\n  issues.map((issue, index) => {\n\n    let message =\n      issue.policy;\n\n    if (issue.evidence) {\n      message += ` — ${issue.evidence}`;\n    }\n\n    return {\n      number: index + 1,\n      policy_id: issue.policy_id,\n      title: issue.policy,\n      severity: issue.severity,\n      message,\n      expected: issue.expected,\n      detected: issue.detected,\n      reason: issue.reason\n    };\n  });\n\n\n// ============================================\n// OUTPUT FOR FORM ENDING\n// ============================================\n\nreturn [{\n  json: {\n\n    status,\n\n    statusTitle,\n\n    statusMessage,\n\n    file:\n      report.sourceFile,\n\n    score:\n      `${counts.passed}/${counts.total}`,\n\n    passed:\n      counts.passed,\n\n    total:\n      counts.total,\n\n    failed:\n      counts.failed,\n\n    reviewRequired:\n      counts.reviewRequired,\n\n    issueCount:\n      issues.length,\n\n    categories:\n      categorySummary,\n\n    issues:\n      issueSummary,\n\n    institution:\n      report.policyPack?.institution,\n\n    policyVersion:\n      report.policyPack?.version\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        288
+      ],
+      "id": "6dd303e9-a5de-5037-9253-c3ad9fc136df",
+      "name": "Build Form Result"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "={{ $json.status === 'PASS' ? '✓ PAPER PASSED' : $json.status === 'FAIL' ? '✕ CHANGES REQUIRED' : '⚠ REVIEW REQUIRED' }}",
+        "completionMessage": "={{ \n$json.file + '\\n\\n' +\n\n'RESULT: ' + $json.score + ' requirements passed\\n\\n' +\n\n($json.status === 'PASS'\n  ? 'No compliance issues were detected.\\n\\n'\n  : $json.issueCount + ' issue(s) found:\\n\\n' +\n    $json.issues.map(issue =>\n      '• ' + issue.title +\n      (issue.evidence ? '\\n  Found: ' + issue.evidence : '') +\n      (issue.expected ? '\\n  Expected: ' + issue.expected : '') +\n      (issue.detected && issue.detected !== 'NOT_FOUND'\n        ? '\\n  Detected: ' + issue.detected\n        : '')\n    ).join('\\n\\n')\n) +\n\n'\\n\\n──────────────\\n' +\n\n$json.categories.map(category =>\n  (category.status === 'PASS' ? '✓ ' :\n   category.status === 'FAIL' ? '✕ ' : '⚠ ') +\n  category.label +\n  ' — ' + category.passed + '/' + category.total\n).join('\\n') +\n\n'\\n\\n' + $json.statusMessage +\n\n'\\n\\n' +\n$json.institution +\n' · Policy ' + $json.policyVersion\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1216,
+        288
+      ],
+      "id": "81693795-3a79-5874-8128-bdb2d1003e49",
+      "name": "Form"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Prepare DOCX as ZIP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare DOCX as ZIP": {
+      "main": [
+        [
+          {
+            "node": "Compression",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compression": {
+      "main": [
+        [
+          {
+            "node": "Parse DOCX Structure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse DOCX Structure": {
+      "main": [
+        [
+          {
+            "node": "Normalize Document Structure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Document Structure": {
+      "main": [
+        [
+          {
+            "node": "Resolve Effective Formatting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Effective Formatting": {
+      "main": [
+        [
+          {
+            "node": "Load University Policy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Formatting Rules": {
+      "main": [
+        [
+          {
+            "node": "Validate Required Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Required Sections": {
+      "main": [
+        [
+          {
+            "node": "Validate Citations & References",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load University Policy": {
+      "main": [
+        [
+          {
+            "node": "Validate Formatting Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Margins": {
+      "main": [
+        [
+          {
+            "node": "Validate Heading Hierarchy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Heading Hierarchy": {
+      "main": [
+        [
+          {
+            "node": "Validate Figures",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Figures": {
+      "main": [
+        [
+          {
+            "node": "Validate Long Quotations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Long Quotations": {
+      "main": [
+        [
+          {
+            "node": "Build PAPERGUARD Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Citations & References": {
+      "main": [
+        [
+          {
+            "node": "Validate Margins",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build PAPERGUARD Report": {
+      "main": [
+        [
+          {
+            "node": "Build Form Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Form Result": {
+      "main": [
+        [
+          {
+            "node": "Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}
