@@ -1,18 +1,14 @@
 # PAPERGUARD — Document Validation & Review Workflow
 
-An explainable n8n pipeline that extracts DOCX structure, applies document policies, and produces a report with evidence and review states.
+**Checking a document against a specification means dozens of small, easy-to-miss comparisons. PAPERGUARD is an n8n workflow that reads a DOCX's underlying structure, checks it against an explicit policy pack, and returns a report with evidence, flagging the cases a person should look at.**
 
-![PaperGuard architecture](docs/architecture.png)
-
-*Architecture portion cropped from the original overview graphic. The real workflow and report appear below.*
-
-## The problem
-
-Checking a document against formatting, section, citation, and figure requirements involves many small comparisons. Repeating those checks manually makes it easy to miss an issue or apply the same rule differently across documents.
-
-PaperGuard reads the underlying DOCX structure and applies an explicit policy pack. It reports detected violations and marks selected ambiguous cases for review. It does not use an LLM, assess academic merit, verify factual accuracy, or detect plagiarism.
-
-## The workflow
+| | |
+| --- | --- |
+| **Input** | a `.docx` uploaded through an n8n form |
+| **Checks** | 18 policies: sections, abstract length, fonts, spacing, margins, citations, figures, quotations, heading hierarchy |
+| **Returns** | `PASS` / `FAIL` / `REVIEW_REQUIRED` per policy, with expected vs. detected values |
+| **Uses AI?** | no; validation is deterministic, and ambiguous figure/quotation cases go to a person |
+| **Status** | portfolio implementation; template-sensitive parser, no general DOCX compatibility guarantee |
 
 ```text
 DOCX upload → decompress OOXML → parse document and styles
@@ -20,6 +16,19 @@ DOCX upload → decompress OOXML → parse document and styles
   → structure / typography / citations / margins / headings / figures / quotations
   → structured report → readable form result
 ```
+
+![PaperGuard architecture](docs/architecture.png)
+
+## What's in this repo
+
+- [`workflow/paperguard.json`](workflow/paperguard.json): the exported n8n workflow (inactive, built-in nodes only, no credentials needed)
+- [`tests/smoke.mjs`](tests/smoke.mjs): runs the exported normalization and validation code, including missing-reference and review-state cases
+- [`examples/`](examples/): synthetic OOXML input and the generated report
+- [`docs/implementation-notes.md`](docs/implementation-notes.md): parser assumptions and known limits
+
+## Why no LLM
+
+Margins, fonts, section order and citation matching have right answers, and code checks them the same way every time. A model would add cost and variability without improving those checks. Where the answer is genuinely unclear, such as figure attribution or uncertain quotations, the report marks the case `REVIEW_REQUIRED` instead of guessing. PAPERGUARD does not assess academic merit, verify facts or detect plagiarism.
 
 ## How it works
 
